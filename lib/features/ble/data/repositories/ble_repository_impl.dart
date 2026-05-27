@@ -11,7 +11,7 @@ import 'package:flutter_reactive_ble/flutter_reactive_ble.dart'
     hide CharacteristicValue, ScanFailure, Unit;
 import 'package:rxdart/rxdart.dart';
 
-import '../../core/error/failures.dart';
+import '../../../../core/error/failures.dart';
 import '../../domain/entities/ble_characteristic.dart';
 import '../../domain/entities/ble_connection_status.dart';
 import '../../domain/entities/ble_device.dart';
@@ -60,9 +60,19 @@ final class BleRepositoryImpl implements IBleRepository {
   Stream<Either<BleFailure, List<BleDevice>>> scanDevices({
     List<Uuid> withServices = const [],
   }) {
-    // Cancel any in-progress scan; clear stale results.
-    _scanSubscription?.cancel();
+    _startScanInternal(withServices);
+    return _scanSubject.stream;
+  }
+
+  Future<void> _startScanInternal(List<Uuid> withServices) async {
+    // Cancel any in-progress scan and wait a moment for the Android BLE stack
+    // to actually stop the scan to prevent SCAN_FAILED_ALREADY_STARTED (code 1).
+    await stopScan();
+    await Future.delayed(const Duration(milliseconds: 250));
+
     _scannedDevices.clear();
+    // Reset the scan subject to clear any cached errors from a previous scan
+    _scanSubject.add(const Right([]));
 
     _scanSubscription = _ble
         .scanForDevices(
@@ -73,11 +83,24 @@ final class BleRepositoryImpl implements IBleRepository {
           _onScanResult,
           onError: (Object error) {
             debugPrint('[BleRepo] Scan error: $error');
-            _scanSubject.add(Left(ScanFailure(error.toString())));
+            final errStr = error.toString();
+            String message = errStr;
+            
+            // "Bluetooth disabled" string is thrown natively by the scanner in some conditions.
+            // DO NOT map "code 1" to "Bluetooth disabled", code 1 is SCAN_FAILED_ALREADY_STARTED.
+            if (errStr.contains('Bluetooth disabled') || errStr.toLowerCase().contains('bluetooth is turned off')) {
+              message = 'Bluetooth is turned off. Please enable it to scan for nearby devices.';
+            } else if (errStr.contains('Location services disabled') || errStr.contains('code 3')) {
+              message = 'Location services are disabled. Please enable them to scan for BLE devices.';
+            } else if (errStr.contains('code 1')) {
+              message = 'Scan already in progress. Please wait a moment and try again.';
+            } else {
+              message = 'Scan failed: $errStr';
+            }
+            
+            _scanSubject.add(Left(ScanFailure(message)));
           },
         );
-
-    return _scanSubject.stream;
   }
 
   void _onScanResult(DiscoveredDevice result) {
@@ -113,10 +136,15 @@ final class BleRepositoryImpl implements IBleRepository {
     // onListen fires synchronously when the caller subscribes.
     // Emitting [connecting] here guarantees it's always the first event —
     // even before the BLE stack produces its first ConnectionStateUpdate.
-    controller.onListen = () {
+    controller.onListen = () async {
       if (!controller.isClosed) {
         controller.add(BleConnectionStatus.connecting);
       }
+
+      // CRITICAL FOR ANDROID: Stop any active scan before attempting to connect.
+      // Scanning while connecting is highly unreliable and often causes the 
+      // connection attempt to hang indefinitely or fail.
+      await stopScan();
 
       final sub = _ble
           .connectToDevice(
@@ -212,7 +240,24 @@ final class BleRepositoryImpl implements IBleRepository {
     }
   }
 
+  // ── MTU Negotiation ────────────────────────────────────────────────────────
+
+  @override
+  Future<Either<BleFailure, int>> requestMtu(String deviceId, int mtu) async {
+    try {
+      final negotiated =
+          await _ble.requestMtu(deviceId: deviceId, mtu: mtu);
+      debugPrint('[BleRepo] MTU negotiated to $negotiated for $deviceId');
+      return Right(negotiated);
+    } catch (e) {
+      // MTU negotiation is best-effort; log and continue.
+      debugPrint('[BleRepo] MTU negotiation failed for $deviceId: $e');
+      return Left(GattFailure('MTU negotiation failed: $e'));
+    }
+  }
+
   // ── Characteristic Subscription ────────────────────────────────────────────
+
 
   @override
   Stream<Either<BleFailure, domain.CharacteristicValue>>

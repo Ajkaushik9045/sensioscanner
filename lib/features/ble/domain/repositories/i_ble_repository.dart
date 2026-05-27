@@ -3,7 +3,7 @@ import 'package:dartz/dartz.dart' as dartz show Unit;
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart'
     hide CharacteristicValue;
 
-import '../../core/error/failures.dart';
+import '../../../../core/error/failures.dart';
 import '../entities/ble_connection_status.dart';
 import '../entities/ble_device.dart';
 import '../entities/ble_service.dart';
@@ -67,6 +67,14 @@ abstract interface class IBleRepository {
     String deviceId, {
     Duration timeout,
   });
+
+  /// Requests an MTU (Maximum Transmission Unit) size increase.
+  ///
+  /// Larger MTU allows reading/writing larger characteristic values in one
+  /// operation (up to mtu-3 bytes). Most Android 8+ devices support 247.
+  ///
+  /// Failure is silently ignored by callers — MTU negotiation is best-effort.
+  Future<Either<BleFailure, int>> requestMtu(String deviceId, int mtu);
 
   // ── Characteristic Operations ──────────────────────────────────────────────
 

@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:dartz/dartz.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -68,6 +69,10 @@ abstract interface class PermissionService {
   /// Opens the app settings screen so the user can manually grant permissions
   /// that were permanently denied.
   Future<bool> openSettings();
+
+  /// Requests to turn on Bluetooth on the device.
+  /// Returns [true] if successfully enabled (or already enabled), [false] otherwise.
+  Future<bool> enableBluetooth();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -109,6 +114,22 @@ final class PermissionServiceImpl implements PermissionService {
 
   @override
   Future<bool> openSettings() => openAppSettings();
+
+  @override
+  Future<bool> enableBluetooth() async {
+    if (kIsWeb || !Platform.isAndroid) {
+      // iOS and other platforms do not allow enabling Bluetooth programmatically. Open settings.
+      return openSettings();
+    }
+    try {
+      const channel = MethodChannel('com.example.sensioscanner/bluetooth');
+      final result = await channel.invokeMethod<bool>('enableBluetooth');
+      return result ?? false;
+    } catch (e) {
+      debugPrint('[PermissionService] Failed to enable Bluetooth: $e');
+      return false;
+    }
+  }
 
   // ── Internals ──────────────────────────────────────────────────────────────
 
