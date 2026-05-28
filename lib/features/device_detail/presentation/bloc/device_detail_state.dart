@@ -13,6 +13,7 @@ import '../../../ble/domain/entities/characteristic_value.dart' as domain;
 //         └─ transport up ──────► DetailConnected (isDiscovering: true)
 //              └─ GATT done ─────► DetailConnected (services loaded)
 //                   ├─ SubscribeToCharacteristic ─► DetailConnected (streaming)
+//                   ├─ AutoSubscribeAll ──────────► DetailConnected (multi-stream)
 //                   └─ link loss ──────────────────► DetailConnectionLost
 //                        ├─ reconnect (auto) ────────► DetailConnecting
 //                        └─ max retries ─────────────► DetailConnectionLost(maxReached)
@@ -52,21 +53,28 @@ class DetailConnecting extends DeviceDetailState {
   List<Object?> get props => [deviceId, deviceName, isDiscovering];
 }
 
-/// Transport + GATT discovery complete. May be streaming a characteristic.
+/// Transport + GATT discovery complete. May be streaming one or more characteristics.
 ///
-/// This single state covers both "services loaded, idle" and "actively streaming"
-/// to avoid duplicating all the device/services fields in two state classes.
+/// Supports both single-characteristic mode (legacy) and multi-characteristic
+/// mode (SensioVital dashboard). The [activeCharacteristics] map tracks all
+/// currently subscribed characteristics.
 class DetailConnected extends DeviceDetailState {
   const DetailConnected({
     required this.deviceId,
     required this.deviceName,
     required this.services,
     this.connectionStatus = BleConnectionStatus.ready,
+    // ── Legacy single-char fields (kept for backward compat) ─────────────────
     this.activeCharacteristic,
     this.latestValue,
     this.history = const [],
     this.isSubscribing = false,
     this.subscriptionError,
+    // ── Multi-characteristic streaming ───────────────────────────────────────
+    this.activeCharacteristics = const {},
+    this.latestValues = const {},
+    this.histories = const {},
+    this.isMultiStreaming = false,
   });
 
   final String deviceId;
@@ -74,7 +82,7 @@ class DetailConnected extends DeviceDetailState {
   final List<BleService> services;
   final BleConnectionStatus connectionStatus;
 
-  // ── Streaming fields (null when no characteristic is active) ───────────────
+  // ── Single-char streaming (null when no single characteristic is active) ───
   final BleCharacteristic? activeCharacteristic;
   final domain.CharacteristicValue? latestValue;
 
@@ -87,7 +95,24 @@ class DetailConnected extends DeviceDetailState {
   /// Set when the subscription fails so the UI can show an inline error.
   final String? subscriptionError;
 
+  // ── Multi-char streaming (SensioVital dashboard) ───────────────────────────
+
+  /// All currently subscribed characteristics, keyed by characteristic UUID.
+  final Map<String, BleCharacteristic> activeCharacteristics;
+
+  /// Latest value per characteristic UUID.
+  final Map<String, domain.CharacteristicValue> latestValues;
+
+  /// History per characteristic UUID (sliding window of last 20 values each).
+  final Map<String, List<domain.CharacteristicValue>> histories;
+
+  /// True when auto-subscribe-all has been activated (SensioVital mode).
+  final bool isMultiStreaming;
+
   bool get isStreaming => activeCharacteristic != null && !isSubscribing;
+
+  /// True when at least one characteristic has received data in multi mode.
+  bool get hasMultiData => latestValues.isNotEmpty;
 
   DetailConnected copyWith({
     BleConnectionStatus? connectionStatus,
@@ -98,6 +123,10 @@ class DetailConnected extends DeviceDetailState {
     String? subscriptionError,
     bool clearActiveChar = false,
     bool clearSubscriptionError = false,
+    Map<String, BleCharacteristic>? activeCharacteristics,
+    Map<String, domain.CharacteristicValue>? latestValues,
+    Map<String, List<domain.CharacteristicValue>>? histories,
+    bool? isMultiStreaming,
   }) {
     return DetailConnected(
       deviceId: deviceId,
@@ -112,6 +141,10 @@ class DetailConnected extends DeviceDetailState {
       subscriptionError: clearSubscriptionError
           ? null
           : (subscriptionError ?? this.subscriptionError),
+      activeCharacteristics: activeCharacteristics ?? this.activeCharacteristics,
+      latestValues: latestValues ?? this.latestValues,
+      histories: histories ?? this.histories,
+      isMultiStreaming: isMultiStreaming ?? this.isMultiStreaming,
     );
   }
 
@@ -126,6 +159,10 @@ class DetailConnected extends DeviceDetailState {
         history,
         isSubscribing,
         subscriptionError,
+        activeCharacteristics,
+        latestValues,
+        histories,
+        isMultiStreaming,
       ];
 }
 

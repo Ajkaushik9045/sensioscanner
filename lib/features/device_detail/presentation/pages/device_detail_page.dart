@@ -10,6 +10,7 @@ import '../bloc/device_detail_state.dart';
 import '../widgets/connection_status_bar.dart';
 import '../widgets/services_accordion.dart';
 import '../widgets/value_display.dart';
+import '../widgets/vitals_dashboard.dart';
 
 class DeviceDetailPage extends StatelessWidget {
   const DeviceDetailPage({
@@ -145,8 +146,15 @@ class _DeviceDetailView extends StatelessWidget {
                       ),
                     ),
 
-                  // ── Value Display (Live Streaming) ──────────────────────────
-                  if (state.isStreaming && state.latestValue != null)
+                  // ── Multi-Stream Dashboard (SensioVital) ────────────────────
+                  if (state.isMultiStreaming && state.hasMultiData)
+                    VitalsDashboard(
+                      latestValues: state.latestValues,
+                      histories: state.histories,
+                    ),
+
+                  // ── Single-Stream Value Display (Legacy) ────────────────────
+                  if (!state.isMultiStreaming && state.isStreaming && state.latestValue != null)
                     ValueDisplay(
                       latestValue: state.latestValue!,
                       history: state.history,
@@ -157,7 +165,9 @@ class _DeviceDetailView extends StatelessWidget {
                   ServicesAccordion(
                     deviceId: state.deviceId,
                     services: state.services,
-                    activeCharacteristicUuid: state.activeCharacteristic?.uuid,
+                    activeCharacteristicUuids: state.isMultiStreaming
+                        ? state.activeCharacteristics.keys.toSet()
+                        : {if (state.activeCharacteristic != null) state.activeCharacteristic!.uuid},
                     onSubscribe: (qc, bc) {
                       context.read<DeviceDetailBloc>().add(
                             SubscribeToCharacteristicEvent(
@@ -166,8 +176,12 @@ class _DeviceDetailView extends StatelessWidget {
                             ),
                           );
                     },
-                    onUnsubscribe: () {
-                      context.read<DeviceDetailBloc>().add(const UnsubscribeFromCharacteristicEvent());
+                    onUnsubscribe: (charUuid) {
+                      context.read<DeviceDetailBloc>().add(
+                            UnsubscribeFromCharacteristicEvent(
+                              characteristicUuid: charUuid,
+                            ),
+                          );
                     },
                   ),
                   const SizedBox(height: 24),

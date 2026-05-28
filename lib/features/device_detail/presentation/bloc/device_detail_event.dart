@@ -46,7 +46,11 @@ class SubscribeToCharacteristicEvent extends DeviceDetailEvent {
 
 /// Stop the active characteristic subscription.
 class UnsubscribeFromCharacteristicEvent extends DeviceDetailEvent {
-  const UnsubscribeFromCharacteristicEvent();
+  const UnsubscribeFromCharacteristicEvent({this.characteristicUuid});
+  final String? characteristicUuid;
+
+  @override
+  List<Object?> get props => [characteristicUuid];
 }
 
 /// User taps "Reconnect" after max attempts are exhausted.
@@ -94,4 +98,21 @@ class SubscriptionErrorEvent extends DeviceDetailEvent {
 /// Fired by a Timer when the backoff delay expires — triggers a reconnect attempt.
 class AttemptAutoReconnectEvent extends DeviceDetailEvent {
   const AttemptAutoReconnectEvent();
+}
+
+/// Auto-subscribe to all notifiable characteristics (SensioVital dashboard mode).
+class AutoSubscribeAllEvent extends DeviceDetailEvent {
+  const AutoSubscribeAllEvent();
+}
+
+/// A value arrived for a specific characteristic during multi-stream mode.
+class MultiValueReceivedEvent extends DeviceDetailEvent {
+  const MultiValueReceivedEvent({
+    required this.characteristicUuid,
+    required this.value,
+  });
+  final String characteristicUuid;
+  final domain.CharacteristicValue value;
+  @override
+  List<Object?> get props => [characteristicUuid, value];
 }

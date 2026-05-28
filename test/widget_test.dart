@@ -51,6 +51,21 @@ class FakeBleRepository implements IBleRepository {
   }
 
   @override
+  Future<Either<BleFailure, CharacteristicValue>> readCharacteristic(
+    QualifiedCharacteristic characteristic,
+  ) async {
+    return Right(
+      CharacteristicValue(
+        characteristicUuid: characteristic.characteristicId.toString(),
+        serviceUuid: characteristic.serviceId.toString(),
+        deviceId: characteristic.deviceId,
+        value: const [],
+        timestamp: DateTime.now(),
+      ),
+    );
+  }
+
+  @override
   Future<Either<BleFailure, dartz.Unit>> disconnect(String deviceId) async {
     return const Right(unit);
   }

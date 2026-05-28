@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart'
     hide CharacteristicValue, ScanFailure, Unit;
 
+import '../../../../core/services/ble_uuid_names.dart';
 import '../../../ble/domain/entities/ble_characteristic.dart';
 import '../../../ble/domain/entities/ble_service.dart';
 import 'characteristic_panel.dart';
@@ -9,21 +10,24 @@ import 'characteristic_panel.dart';
 /// Collapsible accordion that lists discovered GATT services and their
 /// characteristics. Each service tile expands to show a [CharacteristicPanel]
 /// for each characteristic.
+///
+/// Services and characteristics now display human-readable names when the
+/// UUID is recognised (e.g. "Heart Rate Service" instead of "…0000180D").
 class ServicesAccordion extends StatefulWidget {
   const ServicesAccordion({
     super.key,
     required this.services,
     required this.deviceId,
-    this.activeCharacteristicUuid,
+    required this.activeCharacteristicUuids,
     this.onSubscribe,
     this.onUnsubscribe,
   });
 
   final List<BleService> services;
   final String deviceId;
-  final String? activeCharacteristicUuid;
+  final Set<String> activeCharacteristicUuids;
   final void Function(QualifiedCharacteristic, BleCharacteristic)? onSubscribe;
-  final VoidCallback? onUnsubscribe;
+  final void Function(String characteristicUuid)? onUnsubscribe;
 
   @override
   State<ServicesAccordion> createState() => _ServicesAccordionState();
@@ -66,7 +70,7 @@ class _ServicesAccordionState extends State<ServicesAccordion> {
           service: service,
           deviceId: widget.deviceId,
           isExpanded: _expandedUuids.contains(service.uuid),
-          activeCharacteristicUuid: widget.activeCharacteristicUuid,
+          activeCharacteristicUuids: widget.activeCharacteristicUuids,
           onToggle: () => setState(() {
             if (_expandedUuids.contains(service.uuid)) {
               _expandedUuids.remove(service.uuid);
@@ -88,7 +92,7 @@ class _ServiceTile extends StatelessWidget {
     required this.deviceId,
     required this.isExpanded,
     required this.onToggle,
-    this.activeCharacteristicUuid,
+    required this.activeCharacteristicUuids,
     this.onSubscribe,
     this.onUnsubscribe,
   });
@@ -97,13 +101,16 @@ class _ServiceTile extends StatelessWidget {
   final String deviceId;
   final bool isExpanded;
   final VoidCallback onToggle;
-  final String? activeCharacteristicUuid;
+  final Set<String> activeCharacteristicUuids;
   final void Function(QualifiedCharacteristic, BleCharacteristic)? onSubscribe;
-  final VoidCallback? onUnsubscribe;
+  final void Function(String characteristicUuid)? onUnsubscribe;
 
   @override
   Widget build(BuildContext context) {
     final hasSubscribable = service.subscribableCharacteristics.isNotEmpty;
+    final serviceName = getServiceName(service.uuid);
+    final isKnown = isKnownService(service.uuid);
+    final serviceIcon = _serviceIcon(service.uuid);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -137,7 +144,7 @@ class _ServiceTile extends StatelessWidget {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Icon(
-                        Icons.settings_input_antenna_rounded,
+                        serviceIcon,
                         size: 18,
                         color: hasSubscribable
                             ? const Color(0xFF26C6DA)
@@ -149,15 +156,27 @@ class _ServiceTile extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // ── Human-readable name ─────────────────────────────
                           Text(
-                            _shortUuid(service.uuid),
-                            style: const TextStyle(
-                              color: Colors.white,
+                            serviceName,
+                            style: TextStyle(
+                              color: isKnown ? Colors.white : Colors.white70,
                               fontWeight: FontWeight.w700,
                               fontSize: 13,
-                              fontFamily: 'monospace',
                             ),
                           ),
+                          const SizedBox(height: 2),
+                          // ── UUID subtitle ───────────────────────────────────
+                          Text(
+                            shortUuid(service.uuid),
+                            style: const TextStyle(
+                              color: Colors.white24,
+                              fontSize: 10,
+                              fontFamily: 'monospace',
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
                           Text(
                             '${service.characteristics.length} characteristic${service.characteristics.length == 1 ? '' : 's'}',
                             style: const TextStyle(
@@ -191,7 +210,7 @@ class _ServiceTile extends StatelessWidget {
                 children: [
                   const Divider(color: Color(0xFF1E3A5F), height: 1),
                   ...service.characteristics.map((char) {
-                    final isActive = char.uuid == activeCharacteristicUuid;
+                    final isActive = activeCharacteristicUuids.contains(char.uuid);
                     final qc = QualifiedCharacteristic(
                       characteristicId: Uuid.parse(char.uuid),
                       serviceId: Uuid.parse(char.serviceUuid),
@@ -204,7 +223,7 @@ class _ServiceTile extends StatelessWidget {
                       onSubscribe: onSubscribe != null
                           ? () => onSubscribe!(qc, char)
                           : null,
-                      onUnsubscribe: isActive ? onUnsubscribe : null,
+                      onUnsubscribe: onUnsubscribe,
                     );
                   }),
                 ],
@@ -217,11 +236,16 @@ class _ServiceTile extends StatelessWidget {
     );
   }
 
-  /// Returns just the last 8 chars of UUID for compact display (e.g. "0000180D").
-  String _shortUuid(String uuid) {
-    final stripped = uuid.replaceAll('-', '');
-    return stripped.length > 8
-        ? '…${stripped.substring(stripped.length - 8)}'
-        : stripped;
+  /// Returns a context-appropriate icon based on the service UUID.
+  IconData _serviceIcon(String uuid) {
+    final norm = uuid.toLowerCase();
+    if (norm.contains('180d')) return Icons.favorite_rounded;
+    if (norm.contains('180f')) return Icons.battery_charging_full_rounded;
+    if (norm.contains('180a')) return Icons.info_outline_rounded;
+    if (norm.contains('1800')) return Icons.bluetooth_rounded;
+    if (norm.contains('1801')) return Icons.settings_rounded;
+    // SensioVital custom vitals service
+    if (norm.startsWith('12345678')) return Icons.monitor_heart_rounded;
+    return Icons.settings_input_antenna_rounded;
   }
 }

@@ -1,20 +1,389 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../ble/domain/entities/characteristic_value.dart';
+import '../../domain/vital_sign_parser.dart';
 
-/// Displays a live characteristic value in multiple formats.
+/// Displays a live characteristic value.
 ///
-/// Attempts (in order): UTF-8 string → decimal integer → hex fallback.
-/// All three formats are shown simultaneously so the user can choose which
-/// makes sense for their peripheral.
+/// For known vital signs (HR, SpO₂, Temperature, Battery), shows a rich
+/// parsed card with value, unit, status, and sparkline.
+/// For unknown characteristics, falls back to HEX / DEC / UTF-8 display.
 class ValueDisplay extends StatelessWidget {
   const ValueDisplay({
     super.key,
     required this.latestValue,
     required this.history,
   });
+
+  final CharacteristicValue latestValue;
+  final List<CharacteristicValue> history;
+
+  @override
+  Widget build(BuildContext context) {
+    // Try to parse as a known vital sign.
+    final parsed = parseVitalSign(latestValue);
+
+    if (parsed != null) {
+      final numericHistory = <double>[];
+      for (final h in history) {
+        final p = parseVitalSign(h);
+        if (p != null) numericHistory.add(p.value);
+      }
+      return _ParsedVitalDisplay(
+        vital: parsed,
+        numericHistory: numericHistory,
+        rawValue: latestValue,
+      );
+    }
+
+    // Fallback: raw display.
+    return _RawValueDisplay(latestValue: latestValue, history: history);
+  }
+}
+
+// ── Parsed Vital Display ─────────────────────────────────────────────────────
+
+class _ParsedVitalDisplay extends StatelessWidget {
+  const _ParsedVitalDisplay({
+    required this.vital,
+    required this.numericHistory,
+    required this.rawValue,
+  });
+
+  final ParsedVitalSign vital;
+  final List<double> numericHistory;
+  final CharacteristicValue rawValue;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            const Color(0xFF0D1E35),
+            vital.color.withOpacity(0.06),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: vital.color.withOpacity(0.4),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: vital.color.withOpacity(0.1),
+            blurRadius: 20,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Header ──────────────────────────────────────────────────
+                Row(
+                  children: [
+                    Icon(vital.icon, color: vital.color, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        vital.label,
+                        style: TextStyle(
+                          color: vital.color,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ),
+                    _TimestampChip(timestamp: rawValue.timestamp),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // ── Large Value ──────────────────────────────────────────────
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 300),
+                      transitionBuilder: (child, animation) => FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0, 0.3),
+                            end: Offset.zero,
+                          ).animate(animation),
+                          child: child,
+                        ),
+                      ),
+                      child: Text(
+                        vital.displayValue,
+                        key: ValueKey(vital.displayValue),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 48,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -2,
+                          height: 1.0,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        vital.unit,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.4),
+                          fontSize: 18,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+
+                // ── Status Badge ──────────────────────────────────────────────
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: vital.statusColor.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: vital.statusColor.withOpacity(0.4),
+                      width: 1,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: vital.statusColor,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: vital.statusColor.withOpacity(0.5),
+                              blurRadius: 4,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        vital.statusMessage,
+                        style: TextStyle(
+                          color: vital.statusColor,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // ── Sparkline ──────────────────────────────────────────────────────
+          if (numericHistory.length >= 2) ...[
+            const Divider(color: Color(0xFF1E3A5F), height: 1),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: _SparklineSection(
+                values: numericHistory,
+                color: vital.color,
+              ),
+            ),
+          ],
+
+          // ── Raw Data (collapsible) ──────────────────────────────────────────
+          _RawDataExpander(rawValue: rawValue),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Raw Data Expander ────────────────────────────────────────────────────────
+
+class _RawDataExpander extends StatefulWidget {
+  const _RawDataExpander({required this.rawValue});
+  final CharacteristicValue rawValue;
+
+  @override
+  State<_RawDataExpander> createState() => _RawDataExpanderState();
+}
+
+class _RawDataExpanderState extends State<_RawDataExpander> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        InkWell(
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.code_rounded,
+                  color: Colors.white.withOpacity(0.3),
+                  size: 14,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'Raw Data',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.3),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                AnimatedRotation(
+                  turns: _expanded ? 0.5 : 0,
+                  duration: const Duration(milliseconds: 200),
+                  child: Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    color: Colors.white.withOpacity(0.3),
+                    size: 18,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        AnimatedCrossFade(
+          duration: const Duration(milliseconds: 200),
+          crossFadeState:
+              _expanded ? CrossFadeState.showFirst : CrossFadeState.showSecond,
+          firstChild: Padding(
+            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 12),
+            child: Column(
+              children: [
+                _RawRow(label: 'HEX', value: widget.rawValue.hexString, color: const Color(0xFF80DEEA)),
+                const SizedBox(height: 4),
+                _RawRow(label: 'DEC', value: _toDecimal(widget.rawValue), color: const Color(0xFF80CBC4)),
+                const SizedBox(height: 4),
+                _RawRow(label: 'UTF-8', value: _toUtf8(widget.rawValue), color: const Color(0xFF90CAF9)),
+              ],
+            ),
+          ),
+          secondChild: const SizedBox.shrink(),
+        ),
+      ],
+    );
+  }
+
+  String _toDecimal(CharacteristicValue v) {
+    if (v.value.isEmpty) return '—';
+    if (v.value.length == 1) return '${v.asByte}';
+    final u16 = v.asUint16LE;
+    if (u16 != null) return '$u16 (uint16-LE)';
+    return v.asInt.toString();
+  }
+
+  String _toUtf8(CharacteristicValue v) {
+    if (v.value.isEmpty) return '—';
+    final s = v.asString;
+    if (s == v.hexString) return '(non-printable)';
+    return s;
+  }
+}
+
+class _RawRow extends StatelessWidget {
+  const _RawRow({required this.label, required this.value, required this.color});
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final isCopyable = value != '—' && value != '(non-printable)';
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: isCopyable
+            ? () {
+                Clipboard.setData(ClipboardData(text: value));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('$label copied to clipboard'),
+                    duration: const Duration(seconds: 1),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            : null,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: 42,
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: color.withOpacity(0.3)),
+                ),
+                child: Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: color, fontSize: 8, fontWeight: FontWeight.w800, letterSpacing: 0.6),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  value,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.5),
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+              if (isCopyable) ...[
+                const SizedBox(width: 8),
+                Icon(
+                  Icons.copy_rounded,
+                  color: Colors.white.withOpacity(0.25),
+                  size: 14,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Raw Value Display (fallback for unknown characteristics) ──────────────────
+
+class _RawValueDisplay extends StatelessWidget {
+  const _RawValueDisplay({required this.latestValue, required this.history});
 
   final CharacteristicValue latestValue;
   final List<CharacteristicValue> history;
@@ -98,7 +467,10 @@ class ValueDisplay extends StatelessWidget {
             const SizedBox(height: 16),
             const Divider(color: Color(0xFF1E3A5F), height: 1),
             const SizedBox(height: 12),
-            _SparklineSection(values: numericValues),
+            _SparklineSection(
+              values: numericValues,
+              color: const Color(0xFF26C6DA),
+            ),
           ],
         ],
       ),
@@ -116,7 +488,6 @@ class ValueDisplay extends StatelessWidget {
   String _toUtf8(CharacteristicValue v) {
     if (v.value.isEmpty) return '—';
     final s = v.asString;
-    // If it equals hex, it was a fallback (non-printable chars)
     if (s == v.hexString) return '(non-printable)';
     return s;
   }
@@ -155,42 +526,72 @@ class _ValueRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 48,
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(5),
-            border: Border.all(color: color.withOpacity(0.3)),
-          ),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: color,
-              fontSize: 9,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.8,
-            ),
+    final isCopyable = value != '—' && value != '(non-printable)';
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: isCopyable
+            ? () {
+                Clipboard.setData(ClipboardData(text: value));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('$label copied to clipboard'),
+                    duration: const Duration(seconds: 1),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            : null,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(color: color.withOpacity(0.3)),
+                ),
+                child: Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  value,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.85),
+                    fontSize: isHex ? 13 : 14,
+                    fontFamily: isHex ? 'monospace' : null,
+                    fontWeight: isHex ? FontWeight.w500 : FontWeight.w600,
+                    letterSpacing: isHex ? 1.2 : 0,
+                  ),
+                ),
+              ),
+              if (isCopyable) ...[
+                const SizedBox(width: 8),
+                Icon(
+                  Icons.copy_rounded,
+                  color: Colors.white.withOpacity(0.25),
+                  size: 14,
+                ),
+              ],
+            ],
           ),
         ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            value,
-            style: TextStyle(
-              color: Colors.white.withOpacity(0.85),
-              fontSize: isHex ? 13 : 14,
-              fontFamily: isHex ? 'monospace' : null,
-              fontWeight: isHex ? FontWeight.w500 : FontWeight.w600,
-              letterSpacing: isHex ? 1.2 : 0,
-            ),
-          ),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -223,8 +624,9 @@ class _TimestampChip extends StatelessWidget {
 }
 
 class _SparklineSection extends StatelessWidget {
-  const _SparklineSection({required this.values});
+  const _SparklineSection({required this.values, required this.color});
   final List<double> values;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
@@ -236,20 +638,19 @@ class _SparklineSection extends StatelessWidget {
       children: [
         Row(
           children: [
-            const Icon(Icons.show_chart_rounded,
-                color: Color(0xFF4DB6AC), size: 16),
+            Icon(Icons.show_chart_rounded, color: color, size: 16),
             const SizedBox(width: 6),
-            const Text(
-              'History (last 20)',
+            Text(
+              'History (last ${values.length})',
               style: TextStyle(
-                color: Color(0xFF4DB6AC),
+                color: color,
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
             ),
             const Spacer(),
             Text(
-              'min ${minVal.toStringAsFixed(0)}  max ${maxVal.toStringAsFixed(0)}',
+              'min ${minVal.toStringAsFixed(1)}  max ${maxVal.toStringAsFixed(1)}',
               style: const TextStyle(
                 color: Colors.white38,
                 fontSize: 10,
@@ -262,7 +663,7 @@ class _SparklineSection extends StatelessWidget {
         SizedBox(
           height: 60,
           child: CustomPaint(
-            painter: _SparklinePainter(values: values),
+            painter: _SparklinePainter(values: values, color: color),
             size: Size.infinite,
           ),
         ),
@@ -273,9 +674,10 @@ class _SparklineSection extends StatelessWidget {
 
 /// CustomPainter that draws a smooth bezier sparkline with gradient fill.
 class _SparklinePainter extends CustomPainter {
-  _SparklinePainter({required this.values});
+  _SparklinePainter({required this.values, required this.color});
 
   final List<double> values;
+  final Color color;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -284,7 +686,7 @@ class _SparklinePainter extends CustomPainter {
     final minVal = values.reduce(math.min);
     final maxVal = values.reduce(math.max);
     final range = (maxVal - minVal).abs();
-    final effectiveRange = range < 1 ? 1.0 : range;
+    final effectiveRange = range < 0.1 ? 1.0 : range;
 
     // Normalise to [0, 1].
     final norm = values
@@ -312,8 +714,8 @@ class _SparklinePainter extends CustomPainter {
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: [
-          const Color(0xFF26C6DA).withOpacity(0.35),
-          const Color(0xFF26C6DA).withOpacity(0.01),
+          color.withOpacity(0.35),
+          color.withOpacity(0.01),
         ],
       ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
 
@@ -331,7 +733,7 @@ class _SparklinePainter extends CustomPainter {
     }
 
     final linePaint = Paint()
-      ..color = const Color(0xFF26C6DA)
+      ..color = color
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
@@ -340,16 +742,17 @@ class _SparklinePainter extends CustomPainter {
 
     // ── Latest value dot ─────────────────────────────────────────────────────
     final dotPaint = Paint()
-      ..color = const Color(0xFF26C6DA)
+      ..color = color
       ..style = PaintingStyle.fill;
     canvas.drawCircle(points.last, 4, dotPaint);
 
     final dotRingPaint = Paint()
-      ..color = const Color(0xFF26C6DA).withOpacity(0.3)
+      ..color = color.withOpacity(0.3)
       ..style = PaintingStyle.fill;
     canvas.drawCircle(points.last, 7, dotRingPaint);
   }
 
   @override
-  bool shouldRepaint(_SparklinePainter old) => old.values != values;
+  bool shouldRepaint(_SparklinePainter old) =>
+      old.values != values || old.color != color;
 }

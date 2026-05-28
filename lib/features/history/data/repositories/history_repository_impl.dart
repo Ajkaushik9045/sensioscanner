@@ -25,6 +25,11 @@ class HistoryRepositoryImpl implements IHistoryRepository {
     // Insert at the beginning (most recent first)
     history.insert(0, newItem);
     
+    // Limit to the last 5 connected devices
+    if (history.length > 5) {
+      history.removeRange(5, history.length);
+    }
+    
     final jsonList = history.map((e) => e.toJson()).toList();
     await _prefs.setStringList(_historyKey, jsonList);
   }

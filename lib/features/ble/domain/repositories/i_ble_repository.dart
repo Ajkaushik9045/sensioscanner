@@ -90,6 +90,14 @@ abstract interface class IBleRepository {
     QualifiedCharacteristic characteristic,
   );
 
+  /// Performs a one-shot read of a characteristic's current value.
+  ///
+  /// Used for characteristics that are READ-only (e.g. Battery Level)
+  /// and don't support notifications.
+  Future<Either<BleFailure, domain.CharacteristicValue>> readCharacteristic(
+    QualifiedCharacteristic characteristic,
+  );
+
   // ── Disconnect ─────────────────────────────────────────────────────────────
 
   /// Disconnects from [deviceId].

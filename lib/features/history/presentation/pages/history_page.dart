@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import '../../../../core/di/injection.dart';
+import '../../../../core/router/app_router.dart';
 import '../../domain/entities/history_item.dart';
 import '../../domain/usecases/clear_history_use_case.dart';
 import '../../domain/usecases/get_history_use_case.dart';
@@ -115,6 +117,12 @@ class _HistoryPageState extends State<HistoryPage> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           color: const Color(0xFF16324F),
           child: ListTile(
+            onTap: () {
+              context.push(
+                AppRoutes.deviceDetail.replaceFirst(':deviceId', Uri.encodeComponent(item.id)),
+                extra: item.name,
+              );
+            },
             contentPadding: const EdgeInsets.all(16),
             leading: Container(
               width: 48,

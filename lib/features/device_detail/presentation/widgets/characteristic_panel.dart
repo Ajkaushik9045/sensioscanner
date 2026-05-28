@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart'
     hide CharacteristicValue, ScanFailure, Unit;
 
+import '../../../../core/services/ble_uuid_names.dart';
 import '../../../ble/domain/entities/ble_characteristic.dart';
 
 /// Displays a single GATT characteristic with its property badges and
 /// a subscribe/unsubscribe action button.
+///
+/// Shows a human-readable name when the characteristic UUID is recognised
+/// (e.g. "Heart Rate Measurement" instead of "0x00002A37").
 class CharacteristicPanel extends StatelessWidget {
   const CharacteristicPanel({
     super.key,
@@ -20,10 +24,14 @@ class CharacteristicPanel extends StatelessWidget {
   final QualifiedCharacteristic qualifiedCharacteristic;
   final bool isActive;
   final VoidCallback? onSubscribe;
-  final VoidCallback? onUnsubscribe;
+  final void Function(String characteristicUuid)? onUnsubscribe;
 
   @override
   Widget build(BuildContext context) {
+    final charName = getCharacteristicName(characteristic.uuid);
+    final isKnown = isKnownCharacteristic(characteristic.uuid);
+    final description = getCharacteristicDescription(characteristic.uuid);
+
     return AnimatedContainer(
       duration: const Duration(milliseconds: 250),
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -43,22 +51,45 @@ class CharacteristicPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── UUID + properties ──────────────────────────────────────────────
+          // ── Name + UUID + properties ────────────────────────────────────────
           Row(
             children: [
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // ── Human-readable name ──────────────────────────────────
                     Text(
-                      _shortUuid(characteristic.uuid),
+                      charName,
+                      style: TextStyle(
+                        color: isKnown ? Colors.white : Colors.white70,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    // ── UUID subtitle ─────────────────────────────────────────
+                    Text(
+                      shortUuid(characteristic.uuid),
                       style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
+                        color: Colors.white24,
+                        fontSize: 10,
                         fontFamily: 'monospace',
                         letterSpacing: 0.5,
                       ),
                     ),
+                    // ── Description tooltip ───────────────────────────────────
+                    if (description != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        description,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.3),
+                          fontSize: 10,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 6),
                     Wrap(
                       spacing: 5,
@@ -77,7 +108,9 @@ class CharacteristicPanel extends StatelessWidget {
                 _SubscribeButton(
                   isActive: isActive,
                   onSubscribe: onSubscribe,
-                  onUnsubscribe: onUnsubscribe,
+                  onUnsubscribe: isActive && onUnsubscribe != null
+                      ? () => onUnsubscribe!(characteristic.uuid)
+                      : null,
                 ),
               ],
             ],
@@ -114,11 +147,6 @@ class CharacteristicPanel extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  String _shortUuid(String uuid) {
-    final stripped = uuid.replaceAll('-', '').toUpperCase();
-    return '0x${stripped.length > 8 ? stripped.substring(stripped.length - 8) : stripped}';
   }
 }
 

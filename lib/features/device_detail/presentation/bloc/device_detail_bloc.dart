@@ -3,12 +3,18 @@ import 'dart:async';
 import 'package:bloc/bloc.dart';
 import 'package:dartz/dartz.dart' hide Unit;
 import 'package:flutter/foundation.dart';
+import 'package:flutter_reactive_ble/flutter_reactive_ble.dart'
+    hide CharacteristicValue, ScanFailure, Unit;
 import '../../../../core/error/failures.dart';
+import '../../../../core/services/ble_uuid_names.dart';
+import '../../../ble/domain/entities/ble_characteristic.dart';
 import '../../../ble/domain/entities/ble_connection_status.dart';
+import '../../../ble/domain/entities/ble_service.dart';
 import '../../../ble/domain/entities/characteristic_value.dart' as domain;
 import '../../domain/usecases/connect_to_device_use_case.dart';
 import '../../domain/usecases/disconnect_device_use_case.dart';
 import '../../domain/usecases/discover_services_use_case.dart';
+import '../../domain/usecases/read_characteristic_use_case.dart';
 import '../../domain/usecases/request_mtu_use_case.dart';
 import '../../domain/usecases/subscribe_to_characteristic_use_case.dart';
 import '../../../history/domain/usecases/save_device_to_history_use_case.dart';
@@ -21,7 +27,8 @@ import 'device_detail_state.dart';
 ///   • Connection state machine (connecting → connected → lost → retry)
 ///   • MTU negotiation (best-effort, after transport connect)
 ///   • GATT service discovery (with timeout)
-///   • Multiple characteristic subscriptions with backpressure
+///   • Single characteristic subscription with backpressure
+///   • Multi-characteristic auto-subscribe for SensioVital devices
 ///   • Auto-reconnect with exponential backoff (1 s, 2 s, 4 s, max 3 attempts)
 ///   • GATT 133 detection and special 600 ms retry path
 ///   • Clean teardown on user disconnect or BLoC close
@@ -32,12 +39,14 @@ class DeviceDetailBloc extends Bloc<DeviceDetailEvent, DeviceDetailState> {
     required DiscoverServicesUseCase discoverServicesUseCase,
     required RequestMtuUseCase requestMtuUseCase,
     required SubscribeToCharacteristicUseCase subscribeToCharacteristicUseCase,
+    required ReadCharacteristicUseCase readCharacteristicUseCase,
     required SaveDeviceToHistoryUseCase saveDeviceToHistoryUseCase,
   })  : _connectToDevice = connectToDeviceUseCase,
         _disconnectDevice = disconnectDeviceUseCase,
         _discoverServices = discoverServicesUseCase,
         _requestMtu = requestMtuUseCase,
         _subscribeToCharacteristic = subscribeToCharacteristicUseCase,
+        _readCharacteristic = readCharacteristicUseCase,
         _saveDeviceToHistory = saveDeviceToHistoryUseCase,
         super(const DetailInitial()) {
     on<ConnectToDeviceEvent>(_onConnect);
@@ -49,6 +58,8 @@ class DeviceDetailBloc extends Bloc<DeviceDetailEvent, DeviceDetailState> {
     on<ValueReceivedEvent>(_onValueReceived);
     on<SubscriptionErrorEvent>(_onSubscriptionError);
     on<AttemptAutoReconnectEvent>(_onAttemptAutoReconnect);
+    on<AutoSubscribeAllEvent>(_onAutoSubscribeAll);
+    on<MultiValueReceivedEvent>(_onMultiValueReceived);
   }
 
   final ConnectToDeviceUseCase _connectToDevice;
@@ -56,6 +67,7 @@ class DeviceDetailBloc extends Bloc<DeviceDetailEvent, DeviceDetailState> {
   final DiscoverServicesUseCase _discoverServices;
   final RequestMtuUseCase _requestMtu;
   final SubscribeToCharacteristicUseCase _subscribeToCharacteristic;
+  final ReadCharacteristicUseCase _readCharacteristic;
   final SaveDeviceToHistoryUseCase _saveDeviceToHistory;
 
   // ── Device identity (set once on ConnectToDeviceEvent) ─────────────────────
@@ -79,6 +91,23 @@ class DeviceDetailBloc extends Bloc<DeviceDetailEvent, DeviceDetailState> {
   int _reconnectAttempt = 0;
   bool _userInitiatedDisconnect = false;
   Timer? _reconnectTimer;
+  Timer? _batteryPollTimer;
+
+  // ── SensioVital detection ──────────────────────────────────────────────────
+  /// Known device names that trigger auto-subscribe-all (dashboard mode).
+  static const _sensioNames = ['sensiovital', 'sensio vital', 'sensio_vital'];
+
+  bool _isSensioVital(String name, List<BleService> services) {
+    final lower = name.toLowerCase().trim();
+    debugPrint('[DetailBloc] Checking if device "$name" is SensioVital. Services: ${services.map((s) => s.uuid).toList()}');
+    if (_sensioNames.any((n) => lower.contains(n))) {
+      debugPrint('[DetailBloc] Detected SensioVital by name match');
+      return true;
+    }
+    final hasVitalsSvc = services.any((s) => s.uuid.toLowerCase() == kSensioVitalsServiceUuid.toLowerCase());
+    debugPrint('[DetailBloc] Detected SensioVital by service UUID match: $hasVitalsSvc');
+    return hasVitalsSvc;
+  }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Public event handlers
@@ -140,35 +169,66 @@ class DeviceDetailBloc extends Bloc<DeviceDetailEvent, DeviceDetailState> {
     if (state is! DetailConnected) return;
     final current = state as DetailConnected;
 
-    // Cancel previous subscription for a different characteristic.
-    final prevUuid = current.activeCharacteristic?.uuid;
-    if (prevUuid != null && prevUuid != event.bleCharacteristic.uuid) {
-      await _charSubs[prevUuid]?.cancel();
-      _charSubs.remove(prevUuid);
-    }
+    if (current.isMultiStreaming || _isSensioVital(current.deviceName, current.services)) {
+      final char = event.bleCharacteristic;
+      final qc = event.qualifiedCharacteristic;
 
-    emit(current.copyWith(
-      activeCharacteristic: event.bleCharacteristic,
-      isSubscribing: true,
-      clearActiveChar: false,
-      clearSubscriptionError: true,
-    ));
+      // Cancel any existing subscription for this specific characteristic.
+      await _charSubs[char.uuid]?.cancel();
 
-    final sub = _subscribeToCharacteristic(event.qualifiedCharacteristic)
-        .listen((either) {
-      if (isClosed) return;
-      either.fold(
-        (failure) => add(SubscriptionErrorEvent(failure)),
-        (value) => add(ValueReceivedEvent(value)),
-      );
-    });
+      final sub = _subscribeToCharacteristic(qc).listen((either) {
+        if (isClosed) return;
+        either.fold(
+          (failure) {
+            debugPrint('[DetailBloc] Multi-sub error for ${char.uuid}: ${failure.message}');
+          },
+          (value) => add(MultiValueReceivedEvent(
+            characteristicUuid: char.uuid,
+            value: value,
+          )),
+        );
+      });
 
-    _charSubs[event.bleCharacteristic.uuid] = sub;
+      _charSubs[char.uuid] = sub;
 
-    // If we're still in the subscribing state (not blown away by a disconnect),
-    // mark subscribing as done.
-    if (state is DetailConnected) {
-      emit((state as DetailConnected).copyWith(isSubscribing: false));
+      final newActiveChars = Map<String, BleCharacteristic>.from(current.activeCharacteristics);
+      newActiveChars[char.uuid] = char;
+
+      emit(current.copyWith(
+        activeCharacteristics: newActiveChars,
+        isMultiStreaming: true,
+      ));
+    } else {
+      // Cancel previous subscription for a different characteristic.
+      final prevUuid = current.activeCharacteristic?.uuid;
+      if (prevUuid != null && prevUuid != event.bleCharacteristic.uuid) {
+        await _charSubs[prevUuid]?.cancel();
+        _charSubs.remove(prevUuid);
+      }
+
+      emit(current.copyWith(
+        activeCharacteristic: event.bleCharacteristic,
+        isSubscribing: true,
+        clearActiveChar: false,
+        clearSubscriptionError: true,
+      ));
+
+      final sub = _subscribeToCharacteristic(event.qualifiedCharacteristic)
+          .listen((either) {
+        if (isClosed) return;
+        either.fold(
+          (failure) => add(SubscriptionErrorEvent(failure)),
+          (value) => add(ValueReceivedEvent(value)),
+        );
+      });
+
+      _charSubs[event.bleCharacteristic.uuid] = sub;
+
+      // If we're still in the subscribing state (not blown away by a disconnect),
+      // mark subscribing as done.
+      if (state is DetailConnected) {
+        emit((state as DetailConnected).copyWith(isSubscribing: false));
+      }
     }
   }
 
@@ -179,13 +239,149 @@ class DeviceDetailBloc extends Bloc<DeviceDetailEvent, DeviceDetailState> {
     if (state is! DetailConnected) return;
     final current = state as DetailConnected;
 
-    final uuid = current.activeCharacteristic?.uuid;
-    if (uuid != null) {
-      await _charSubs[uuid]?.cancel();
-      _charSubs.remove(uuid);
+    if (current.isMultiStreaming) {
+      final uuid = event.characteristicUuid;
+      if (uuid != null) {
+        await _charSubs[uuid]?.cancel();
+        _charSubs.remove(uuid);
+
+        final newActiveChars = Map<String, BleCharacteristic>.from(current.activeCharacteristics);
+        newActiveChars.remove(uuid);
+
+        final newLatestValues = Map<String, domain.CharacteristicValue>.from(current.latestValues);
+        newLatestValues.remove(uuid);
+
+        final newHistories = Map<String, List<domain.CharacteristicValue>>.from(current.histories);
+        newHistories.remove(uuid);
+
+        emit(current.copyWith(
+          activeCharacteristics: newActiveChars,
+          latestValues: newLatestValues,
+          histories: newHistories,
+        ));
+      }
+    } else {
+      final uuid = event.characteristicUuid ?? current.activeCharacteristic?.uuid;
+      if (uuid != null) {
+        await _charSubs[uuid]?.cancel();
+        _charSubs.remove(uuid);
+      }
+
+      emit(current.copyWith(clearActiveChar: true, clearSubscriptionError: true));
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Auto-subscribe all notifiable characteristics (SensioVital mode)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  Future<void> _onAutoSubscribeAll(
+    AutoSubscribeAllEvent event,
+    Emitter<DeviceDetailState> emit,
+  ) async {
+    if (state is! DetailConnected) return;
+    final current = state as DetailConnected;
+
+    // Collect all subscribable characteristics across all services.
+    final subscribableChars = <BleCharacteristic>[];
+    for (final service in current.services) {
+      subscribableChars.addAll(service.subscribableCharacteristics);
     }
 
-    emit(current.copyWith(clearActiveChar: true, clearSubscriptionError: true));
+    if (subscribableChars.isEmpty) return;
+
+    final activeCharsMap = <String, BleCharacteristic>{};
+    for (final char in subscribableChars) {
+      activeCharsMap[char.uuid] = char;
+
+      final qc = QualifiedCharacteristic(
+        characteristicId: Uuid.parse(char.uuid),
+        serviceId: Uuid.parse(char.serviceUuid),
+        deviceId: current.deviceId,
+      );
+
+      final sub = _subscribeToCharacteristic(qc).listen((either) {
+        if (isClosed) return;
+        either.fold(
+          (failure) {
+            debugPrint('[DetailBloc] Multi-sub error for ${char.uuid}: ${failure.message}');
+          },
+          (value) => add(MultiValueReceivedEvent(
+            characteristicUuid: char.uuid,
+            value: value,
+          )),
+        );
+      });
+
+      _charSubs[char.uuid] = sub;
+    }
+
+    emit(current.copyWith(
+      activeCharacteristics: activeCharsMap,
+      isMultiStreaming: true,
+    ));
+
+    debugPrint('[DetailBloc] Auto-subscribed to ${subscribableChars.length} characteristics');
+
+    // ── Also poll READ-only characteristics (e.g. Battery Level) ─────────
+    final readOnlyChars = <BleCharacteristic>[];
+    for (final service in current.services) {
+      for (final char in service.readableCharacteristics) {
+        if (!char.canSubscribe) {
+          readOnlyChars.add(char);
+          activeCharsMap[char.uuid] = char;
+        }
+      }
+    }
+
+    if (readOnlyChars.isNotEmpty) {
+      // Do an initial read immediately.
+      _pollReadOnlyChars(readOnlyChars, current.deviceId);
+
+      // Then poll every 10 seconds.
+      _batteryPollTimer?.cancel();
+      _batteryPollTimer = Timer.periodic(
+        const Duration(seconds: 10),
+        (_) => _pollReadOnlyChars(readOnlyChars, current.deviceId),
+      );
+
+      // Re-emit with the read-only chars added to active map.
+      if (state is DetailConnected) {
+        emit((state as DetailConnected).copyWith(
+          activeCharacteristics: activeCharsMap,
+        ));
+      }
+
+      debugPrint('[DetailBloc] Polling ${readOnlyChars.length} read-only characteristics every 10 s');
+    }
+  }
+
+  void _onMultiValueReceived(
+    MultiValueReceivedEvent event,
+    Emitter<DeviceDetailState> emit,
+  ) {
+    if (state is! DetailConnected) return;
+    final current = state as DetailConnected;
+
+    debugPrint('[DetailBloc] Multi-value received for ${event.characteristicUuid}: ${event.value.hexString}');
+
+    // Update latest value for this characteristic.
+    final newLatest = Map<String, domain.CharacteristicValue>.from(current.latestValues);
+    newLatest[event.characteristicUuid] = event.value;
+
+    // Update history (sliding window of 20).
+    final newHistories = Map<String, List<domain.CharacteristicValue>>.from(current.histories);
+    final charHistory = List<domain.CharacteristicValue>.from(
+      newHistories[event.characteristicUuid] ?? [],
+    );
+    charHistory.add(event.value);
+    if (charHistory.length > 20) charHistory.removeAt(0);
+    newHistories[event.characteristicUuid] = charHistory;
+
+    emit(current.copyWith(
+      latestValues: newLatest,
+      histories: newHistories,
+    ));
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -239,6 +435,11 @@ class DeviceDetailBloc extends Bloc<DeviceDetailEvent, DeviceDetailState> {
               deviceName: deviceName,
               services: services,
             ));
+
+            // ── Step 3: Auto-subscribe if SensioVital ────────────────────────
+            if (_isSensioVital(deviceName, services)) {
+              add(const AutoSubscribeAllEvent());
+            }
           },
         );
 
@@ -385,6 +586,8 @@ class DeviceDetailBloc extends Bloc<DeviceDetailEvent, DeviceDetailState> {
   }
 
   Future<void> _cancelAllCharSubscriptions() async {
+    _batteryPollTimer?.cancel();
+    _batteryPollTimer = null;
     for (final sub in _charSubs.values) {
       await sub.cancel();
     }
@@ -395,9 +598,32 @@ class DeviceDetailBloc extends Bloc<DeviceDetailEvent, DeviceDetailState> {
   // Lifecycle
   // ─────────────────────────────────────────────────────────────────────────────
 
+  /// Reads all read-only characteristics once and injects them into multi-stream.
+  void _pollReadOnlyChars(List<BleCharacteristic> chars, String deviceId) {
+    for (final char in chars) {
+      final qc = QualifiedCharacteristic(
+        characteristicId: Uuid.parse(char.uuid),
+        serviceId: Uuid.parse(char.serviceUuid),
+        deviceId: deviceId,
+      );
+
+      _readCharacteristic(qc).then((result) {
+        if (isClosed) return;
+        result.fold(
+          (failure) => debugPrint('[DetailBloc] Read poll error for ${char.uuid}: ${failure.message}'),
+          (value) => add(MultiValueReceivedEvent(
+            characteristicUuid: char.uuid,
+            value: value,
+          )),
+        );
+      });
+    }
+  }
+
   @override
   Future<void> close() async {
     _reconnectTimer?.cancel();
+    _batteryPollTimer?.cancel();
     await _connectionSub?.cancel();
     await _cancelAllCharSubscriptions();
     return super.close();

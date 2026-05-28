@@ -308,6 +308,31 @@ final class BleRepositoryImpl implements IBleRepository {
         );
   }
 
+  // ── Characteristic Read ──────────────────────────────────────────────────────
+
+  @override
+  Future<Either<BleFailure, domain.CharacteristicValue>> readCharacteristic(
+    QualifiedCharacteristic characteristic,
+  ) async {
+    try {
+      final data = await _ble.readCharacteristic(characteristic);
+      return Right(
+        domain.CharacteristicValue(
+          characteristicUuid: characteristic.characteristicId.toString(),
+          serviceUuid: characteristic.serviceId.toString(),
+          deviceId: characteristic.deviceId,
+          value: data,
+          timestamp: DateTime.now(),
+        ),
+      );
+    } catch (e) {
+      debugPrint(
+        '[BleRepo] Read error (${characteristic.characteristicId}): $e',
+      );
+      return Left(CharacteristicFailure('Read failed: $e'));
+    }
+  }
+
   // ── Disconnect ─────────────────────────────────────────────────────────────
 
   @override

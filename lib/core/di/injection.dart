@@ -26,6 +26,7 @@ import '../../features/device_detail/domain/usecases/connect_to_device_use_case.
 import '../../features/device_detail/domain/usecases/disconnect_device_use_case.dart';
 import '../../features/device_detail/domain/usecases/discover_services_use_case.dart';
 import '../../features/device_detail/domain/usecases/request_mtu_use_case.dart';
+import '../../features/device_detail/domain/usecases/read_characteristic_use_case.dart';
 import '../../features/device_detail/domain/usecases/subscribe_to_characteristic_use_case.dart';
 import '../../features/device_detail/presentation/bloc/device_detail_bloc.dart';
 
@@ -86,6 +87,9 @@ Future<void> configureDependencies() async {
   sl.registerLazySingleton<SubscribeToCharacteristicUseCase>(
     () => SubscribeToCharacteristicUseCase(sl<IBleRepository>()),
   );
+  sl.registerLazySingleton<ReadCharacteristicUseCase>(
+    () => ReadCharacteristicUseCase(sl<IBleRepository>()),
+  );
 
   // ── Use Cases: History Feature ─────────────────────────────────────────────
   sl.registerLazySingleton<GetHistoryUseCase>(
@@ -114,6 +118,7 @@ Future<void> configureDependencies() async {
       discoverServicesUseCase: sl<DiscoverServicesUseCase>(),
       requestMtuUseCase: sl<RequestMtuUseCase>(),
       subscribeToCharacteristicUseCase: sl<SubscribeToCharacteristicUseCase>(),
+      readCharacteristicUseCase: sl<ReadCharacteristicUseCase>(),
       saveDeviceToHistoryUseCase: sl<SaveDeviceToHistoryUseCase>(),
     ),
   );
