@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../../core/di/injection.dart';
-import '../../../../core/router/app_router.dart';
 import '../../../../core/services/permission_service.dart';
 import '../../../ble/domain/entities/ble_device.dart';
 import '../bloc/scanner_bloc.dart';
 import '../bloc/scanner_event.dart';
 import '../bloc/scanner_state.dart';
+import '../widgets/device_tile.dart';
+import '../widgets/pulse_animation.dart';
 
 /// Phase 2: Scanner Page
 class ScannerPage extends StatelessWidget {
@@ -343,7 +343,7 @@ class _ScannerViewState extends State<_ScannerView> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         if (isScanning && !hasFilters) ...[
-                          _PulseAnimation(
+                          PulseAnimation(
                             child: Container(
                               padding: const EdgeInsets.all(24),
                               decoration: BoxDecoration(
@@ -386,7 +386,7 @@ class _ScannerViewState extends State<_ScannerView> {
                           final device = devices[index];
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 12),
-                            child: _DeviceTile(device: device),
+                            child: DeviceTile(device: device),
                           );
                         },
                       ),
@@ -405,220 +405,5 @@ class _ScannerViewState extends State<_ScannerView> {
     if (state is ScannerScanning) return state.devices;
     if (state is ScannerStopped) return state.devices;
     return const [];
-  }
-}
-
-class _DeviceTile extends StatelessWidget {
-  const _DeviceTile({required this.device});
-  final BleDevice device;
-
-  @override
-  Widget build(BuildContext context) {
-    final displayName = _getDisplayName(device);
-    
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF16324F),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black26,
-            blurRadius: 8,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: device.isConnectable
-              ? () {
-                  context.push(
-                    AppRoutes.deviceDetail.replaceFirst(':deviceId', Uri.encodeComponent(device.id)),
-                    extra: device.name,
-                  );
-                }
-              : null,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Container(
-                  width: 52,
-                  height: 52,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF1E3A5F), Color(0xFF102A43)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: Colors.white12),
-                  ),
-                  child: Icon(
-                    Icons.bluetooth_rounded,
-                    size: 28,
-                    color: device.isConnectable ? const Color(0xFF26C6DA) : Colors.white38,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        displayName,
-                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        device.id,
-                        style: const TextStyle(fontSize: 12, color: Colors.white54, fontFamily: 'monospace'),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      '${device.rssi} dBm',
-                      style: const TextStyle(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.w500),
-                    ),
-                    const SizedBox(height: 6),
-                    _SignalBars(strength: device.signalStrength),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _getDisplayName(BleDevice device) {
-
-  // Real device name available
-  if (device.name.trim().isNotEmpty) {
-    return device.name;
-  }
-
-  // Manufacturer data fallback
-  if (device.manufacturerData.isNotEmpty) {
-
-    final firstEntry = device.manufacturerData.entries.first;
-
-    final companyId = firstEntry.key;
-    final bytes = firstEntry.value;
-
-    final hexPreview = bytes
-        .take(4)
-        .map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase())
-        .join(':');
-
-    return 'BLE Device ($companyId • $hexPreview)';
-  }
-
-  // // Service UUID fallback
-  // if (device.serviceUuids.isNotEmpty) {
-  //   return 'BLE Service Device';
-  // }
-
-  // Final fallback
-  return 'Unknown BLE Device';
-}
-}
-
-class _SignalBars extends StatelessWidget {
-  const _SignalBars({required this.strength});
-  final SignalStrength strength;
-
-  @override
-  Widget build(BuildContext context) {
-    final bars = switch (strength) {
-      SignalStrength.excellent => 4,
-      SignalStrength.good => 3,
-      SignalStrength.fair => 2,
-      SignalStrength.poor => 1,
-    };
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: List.generate(4, (index) {
-        final active = index < bars;
-        return Container(
-          margin: const EdgeInsets.only(left: 2),
-          width: 4,
-          height: 6.0 + (index * 4),
-          decoration: BoxDecoration(
-            color: active ? const Color(0xFF26C6DA) : Colors.white24,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        );
-      }),
-    );
-  }
-}
-
-class _PulseAnimation extends StatefulWidget {
-  const _PulseAnimation({required this.child});
-  final Widget child;
-
-  @override
-  State<_PulseAnimation> createState() => _PulseAnimationState();
-}
-
-class _PulseAnimationState extends State<_PulseAnimation> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-  late final Animation<double> _scaleAnimation;
-  late final Animation<double> _opacityAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
-    _scaleAnimation = Tween<double>(begin: 1.0, end: 1.5).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
-    _opacityAnimation = Tween<double>(begin: 1.0, end: 0.0).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        AnimatedBuilder(
-          animation: _controller,
-          builder: (context, child) {
-            return Transform.scale(
-              scale: _scaleAnimation.value,
-              child: Opacity(
-                opacity: _opacityAnimation.value,
-                child: Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF26C6DA).withValues(alpha: 0.5),
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
-        widget.child,
-      ],
-    );
   }
 }
