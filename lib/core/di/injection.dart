@@ -29,6 +29,7 @@ import '../../features/device_detail/domain/usecases/request_mtu_use_case.dart';
 import '../../features/device_detail/domain/usecases/read_characteristic_use_case.dart';
 import '../../features/device_detail/domain/usecases/subscribe_to_characteristic_use_case.dart';
 import '../../features/device_detail/presentation/bloc/device_detail_bloc.dart';
+import '../../features/device_detail/presentation/bloc/device_detail_bloc_registry.dart';
 
 /// Global service locator instance.
 final GetIt sl = GetIt.instance;
@@ -109,6 +110,10 @@ Future<void> configureDependencies() async {
       stopScanUseCase: sl<StopScanUseCase>(),
       permissionService: sl<PermissionService>(),
     ),
+  );
+
+  sl.registerLazySingleton<DeviceDetailBlocRegistry>(
+    () => DeviceDetailBlocRegistry(),
   );
 
   sl.registerFactory<DeviceDetailBloc>(

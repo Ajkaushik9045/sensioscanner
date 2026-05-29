@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/di/injection.dart';
 import '../../../ble/domain/entities/ble_connection_status.dart';
 import '../bloc/device_detail_bloc.dart';
+import '../bloc/device_detail_bloc_registry.dart';
 import '../bloc/device_detail_event.dart';
 import '../bloc/device_detail_state.dart';
 import '../widgets/connection_status_bar.dart';
@@ -24,12 +25,18 @@ class DeviceDetailPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (_) => sl<DeviceDetailBloc>()
-        ..add(ConnectToDeviceEvent(
-          deviceId: deviceId,
-          deviceName: deviceName ?? 'Unknown Device',
-        )),
+    final registry = sl<DeviceDetailBlocRegistry>();
+    final bloc = registry.getOrCreate(deviceId);
+
+    if (bloc.state is DetailInitial) {
+      bloc.add(ConnectToDeviceEvent(
+        deviceId: deviceId,
+        deviceName: deviceName ?? 'Unknown Device',
+      ));
+    }
+
+    return BlocProvider.value(
+      value: bloc,
       child: _DeviceDetailView(deviceId: deviceId, deviceName: deviceName ?? 'Unknown Device'),
     );
   }
@@ -47,6 +54,7 @@ class _DeviceDetailView extends StatelessWidget {
       listenWhen: (previous, current) => current is DetailDisconnected || current is DetailError,
       listener: (context, state) {
         if (state is DetailDisconnected) {
+          sl<DeviceDetailBlocRegistry>().remove(deviceId);
           if (context.canPop()) context.pop();
         } else if (state is DetailError) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -64,13 +72,7 @@ class _DeviceDetailView extends StatelessWidget {
             leading: IconButton(
               icon: const Icon(Icons.arrow_back_rounded),
               onPressed: () {
-                // If connected, dispatch disconnect which will eventually pop.
-                // Otherwise just pop.
-                if (state is DetailConnected || state is DetailConnecting || state is DetailConnectionLost) {
-                  context.read<DeviceDetailBloc>().add(const DisconnectDeviceEvent());
-                } else {
-                  if (context.canPop()) context.pop();
-                }
+                if (context.canPop()) context.pop();
               },
             ),
           ),

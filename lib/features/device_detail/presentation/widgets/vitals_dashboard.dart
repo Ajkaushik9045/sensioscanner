@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../ble/domain/entities/characteristic_value.dart';
 import '../../domain/vital_sign_parser.dart';
+import '../../../../core/services/ble_uuid_names.dart';
 
 /// A premium health dashboard that displays live vital signs in a 2×2 grid
 /// of animated cards. Designed for the SensioVital multi-stream mode.
@@ -22,43 +23,67 @@ class VitalsDashboard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Detect if we are connecting to a Ring device based on service or characteristic UUIDs
+    final isRing = latestValues.values.any((cv) =>
+        cv.serviceUuid.toLowerCase() == kSensioRingServiceUuid.toLowerCase() ||
+        cv.characteristicUuid.toLowerCase() == kSensioRingHrvStressCharUuid.toLowerCase() ||
+        cv.characteristicUuid.toLowerCase() == kSensioRingStepsCharUuid.toLowerCase() ||
+        cv.characteristicUuid.toLowerCase() == kSensioRingSkinTempCharUuid.toLowerCase() ||
+        cv.characteristicUuid.toLowerCase() == kBtSigSpo2PlxCharUuid.toLowerCase());
+
     // Initialize standard vitals with placeholders to avoid layout pop-in.
-    final vitalsMap = <VitalType, ParsedVitalSign>{
-      VitalType.heartRate: getPlaceholderVital(VitalType.heartRate),
-      VitalType.spo2: getPlaceholderVital(VitalType.spo2),
-      VitalType.temperature: getPlaceholderVital(VitalType.temperature),
-      VitalType.battery: getPlaceholderVital(VitalType.battery),
-    };
+    final vitalsMap = isRing
+        ? <VitalType, ParsedVitalSign>{
+            VitalType.hrv: getPlaceholderVital(VitalType.hrv),
+            VitalType.stress: getPlaceholderVital(VitalType.stress),
+            VitalType.steps: getPlaceholderVital(VitalType.steps),
+            VitalType.skinTemp: getPlaceholderVital(VitalType.skinTemp),
+            VitalType.spo2: getPlaceholderVital(VitalType.spo2),
+          }
+        : <VitalType, ParsedVitalSign>{
+            VitalType.heartRate: getPlaceholderVital(VitalType.heartRate),
+            VitalType.spo2: getPlaceholderVital(VitalType.spo2),
+            VitalType.temperature: getPlaceholderVital(VitalType.temperature),
+            VitalType.battery: getPlaceholderVital(VitalType.battery),
+          };
+
     final vitalHistories = <VitalType, List<double>>{};
 
     // Overlay any received values.
     for (final entry in latestValues.entries) {
       final uuid = entry.key;
       final cv = entry.value;
-      final parsed = parseVitalSign(cv);
-      if (parsed != null) {
+      final parsedList = parseVitalSigns(cv);
+      for (final parsed in parsedList) {
         vitalsMap[parsed.type] = parsed;
 
         // Extract numeric history for sparklines.
         final hist = histories[uuid] ?? [];
         final nums = <double>[];
         for (final h in hist) {
-          final p = parseVitalSign(h);
-          if (p != null) nums.add(p.value);
+          final pList = parseVitalSigns(h);
+          for (final p in pList) {
+            if (p.type == parsed.type) {
+              nums.add(p.value);
+            }
+          }
         }
         vitalHistories[parsed.type] = nums;
       }
     }
 
-    // Convert to list sorted in standard order: HR, SpO2, Temp, Battery.
+    // Convert to list sorted in standard order.
     final parsedVitals = vitalsMap.values.toList()
       ..sort((a, b) => a.type.index.compareTo(b.type.index));
 
-    final activeCount = latestValues.entries
-        .map((entry) => vitalTypeForUuid(entry.key, entry.value.serviceUuid))
-        .where((type) => type != VitalType.unknown)
-        .toSet()
-        .length;
+    final activeVitals = <VitalType>{};
+    for (final entry in latestValues.entries) {
+      final parsedList = parseVitalSigns(entry.value);
+      for (final p in parsedList) {
+        activeVitals.add(p.type);
+      }
+    }
+    final activeCount = activeVitals.length;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

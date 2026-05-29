@@ -12,6 +12,18 @@ const String kSensioSpO2CharUuid =
 const String kSensioTemperatureCharUuid =
     '12345678-1234-4678-8234-56789abcdef2';
 
+// ── SensioRing Custom UUIDs ──────────────────────────────────────────────────
+const String kSensioRingServiceUuid =
+    'abcdef01-1234-4678-8234-56789abcdef0';
+const String kSensioRingHrvStressCharUuid =
+    'abcdef01-1234-4678-8234-56789abcdef1';
+const String kSensioRingStepsCharUuid =
+    'abcdef01-1234-4678-8234-56789abcdef2';
+const String kSensioRingSkinTempCharUuid =
+    'abcdef01-1234-4678-8234-56789abcdef3';
+const String kBtSigSpo2PlxCharUuid =
+    '00002a5f-0000-1000-8000-00805f9b34fb';
+
 // ── Standard BLE SIG base UUID suffix ────────────────────────────────────────
 const String _bleSigBaseSuffix = '-0000-1000-8000-00805f9b34fb';
 
@@ -30,6 +42,8 @@ const Map<String, String> _serviceNames = {
   '00001826$_bleSigBaseSuffix': 'Fitness Machine',
   // SensioVital custom
   kSensioVitalsServiceUuid: 'SensioVital Vitals',
+  // SensioRing custom
+  kSensioRingServiceUuid: 'SensioRing Vitals',
 };
 
 /// Known GATT Characteristic names keyed by normalised UUID.
@@ -62,6 +76,11 @@ const Map<String, String> _characteristicNames = {
   // SensioVital custom
   kSensioSpO2CharUuid: 'SpO₂ (Oxygen Saturation)',
   kSensioTemperatureCharUuid: 'Body Temperature',
+  // SensioRing custom
+  kSensioRingHrvStressCharUuid: 'HRV & Stress Index',
+  kSensioRingStepsCharUuid: 'Steps Counter',
+  kSensioRingSkinTempCharUuid: 'Skin Temperature',
+  kBtSigSpo2PlxCharUuid: 'SpO₂ PLX (Oxygen Saturation)',
 };
 
 /// Brief descriptions for known characteristics (for tooltips / subtitles).
@@ -74,6 +93,14 @@ const Map<String, String> _characteristicDescriptions = {
       'Blood oxygen saturation (%), notified every 1 s',
   kSensioTemperatureCharUuid:
       'Core body temperature in °C, notified every 1 s',
+  kSensioRingHrvStressCharUuid:
+      'Heart Rate Variability (ms) and Stress Index (0-100%)',
+  kSensioRingStepsCharUuid:
+      'Cumulative daily step count',
+  kSensioRingSkinTempCharUuid:
+      'Peripheral skin temperature in °C',
+  kBtSigSpo2PlxCharUuid:
+      'Bluetooth standard PLX spot-check SpO₂ (%)',
 };
 
 // ── Public API ───────────────────────────────────────────────────────────────

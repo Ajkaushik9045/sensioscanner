@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../ble/domain/entities/characteristic_value.dart';
@@ -5,7 +6,17 @@ import '../../../core/services/ble_uuid_names.dart';
 
 // ── Vital Sign Types ─────────────────────────────────────────────────────────
 
-enum VitalType { heartRate, spo2, temperature, battery, unknown }
+enum VitalType {
+  heartRate,
+  spo2,
+  temperature,
+  battery,
+  hrv,
+  stress,
+  steps,
+  skinTemp,
+  unknown
+}
 
 enum VitalStatus { normal, warning, critical }
 
@@ -58,58 +69,66 @@ class ParsedVitalSign {
 
 // ── Parser ───────────────────────────────────────────────────────────────────
 
-/// Attempts to parse a [CharacteristicValue] into a [ParsedVitalSign].
+/// Attempts to parse a [CharacteristicValue] into a single [ParsedVitalSign].
 ///
-/// Returns `null` if the characteristic UUID is not a known vital sign.
+/// Kept for backwards compatibility with single value views. For characteristics
+/// that contain multiple values (e.g. HRV & Stress), this returns the first vital.
 ParsedVitalSign? parseVitalSign(CharacteristicValue cv) {
+  final list = parseVitalSigns(cv);
+  return list.isNotEmpty ? list.first : null;
+}
+
+/// Parses a [CharacteristicValue] and yields all decoded [ParsedVitalSign]s.
+///
+/// Supports standard BLE SIG services and custom/ring properties.
+List<ParsedVitalSign> parseVitalSigns(CharacteristicValue cv) {
   final uuid = _normalise(cv.characteristicUuid);
   final serviceUuid = _normalise(cv.serviceUuid);
+  final results = <ParsedVitalSign>[];
 
   // Heart Rate Measurement (0x2A37) or under Heart Rate Service (0x180D)
   if (uuid == _normalise('00002a37-0000-1000-8000-00805f9b34fb') ||
       serviceUuid == _normalise('0000180d-0000-1000-8000-00805f9b34fb')) {
-    return _parseHeartRate(cv);
+    results.add(_parseHeartRate(cv));
   }
 
   // Battery Level (0x2A19) or under Battery Service (0x180F)
-  if (uuid == _normalise('00002a19-0000-1000-8000-00805f9b34fb') ||
+  else if (uuid == _normalise('00002a19-0000-1000-8000-00805f9b34fb') ||
       serviceUuid == _normalise('0000180f-0000-1000-8000-00805f9b34fb')) {
-    return _parseBattery(cv);
+    results.add(_parseBattery(cv));
   }
 
   // SensioVital SpO2
-  if (uuid == _normalise(kSensioSpO2CharUuid)) {
-    return _parseSpO2(cv);
+  else if (uuid == _normalise(kSensioSpO2CharUuid)) {
+    results.add(_parseSpO2(cv));
   }
 
   // SensioVital Temperature
-  if (uuid == _normalise(kSensioTemperatureCharUuid)) {
-    return _parseTemperature(cv);
+  else if (uuid == _normalise(kSensioTemperatureCharUuid)) {
+    results.add(_parseTemperature(cv));
   }
 
-  return null;
-}
+  // SensioRing HRV & Stress Index
+  else if (uuid == _normalise(kSensioRingHrvStressCharUuid)) {
+    results.addAll(_parseHrvStress(cv));
+  }
 
-/// Returns the [VitalType] for a characteristic UUID, or [VitalType.unknown].
-VitalType vitalTypeForUuid(String uuid, [String? serviceUuid]) {
-  final norm = _normalise(uuid);
-  final normSvc = serviceUuid != null ? _normalise(serviceUuid) : null;
+  // SensioRing Steps Counter
+  else if (uuid == _normalise(kSensioRingStepsCharUuid)) {
+    results.add(_parseSteps(cv));
+  }
 
-  if (norm == _normalise('00002a37-0000-1000-8000-00805f9b34fb') ||
-      normSvc == _normalise('0000180d-0000-1000-8000-00805f9b34fb')) {
-    return VitalType.heartRate;
+  // SensioRing Skin Temperature
+  else if (uuid == _normalise(kSensioRingSkinTempCharUuid)) {
+    results.add(_parseSkinTemp(cv));
   }
-  if (norm == _normalise('00002a19-0000-1000-8000-00805f9b34fb') ||
-      normSvc == _normalise('0000180f-0000-1000-8000-00805f9b34fb')) {
-    return VitalType.battery;
+
+  // SpO2 PLX (Spot Check)
+  else if (uuid == _normalise(kBtSigSpo2PlxCharUuid)) {
+    results.add(_parseSpo2Plx(cv));
   }
-  if (norm == _normalise(kSensioSpO2CharUuid)) {
-    return VitalType.spo2;
-  }
-  if (norm == _normalise(kSensioTemperatureCharUuid)) {
-    return VitalType.temperature;
-  }
-  return VitalType.unknown;
+
+  return results;
 }
 
 // ── Heart Rate ───────────────────────────────────────────────────────────────
@@ -268,6 +287,157 @@ ParsedVitalSign _parseBattery(CharacteristicValue cv) {
   return (VitalStatus.normal, 'Good');
 }
 
+// ── SensioRing Custom Parsers ───────────────────────────────────────────────
+
+List<ParsedVitalSign> _parseHrvStress(CharacteristicValue cv) {
+  final bytes = cv.value;
+  if (bytes.length < 3) return const [];
+
+  final hrvRaw = (bytes[0] & 0xFF) | ((bytes[1] & 0xFF) << 8);
+  final hrv = hrvRaw / 10.0;
+  final stress = bytes[2] & 0xFF;
+
+  final (hrvStatus, hrvMsg) = _classifyHrv(hrv);
+  final (stressStatus, stressMsg) = _classifyStress(stress);
+
+  return [
+    ParsedVitalSign(
+      type: VitalType.hrv,
+      value: hrv,
+      displayValue: hrv.toStringAsFixed(1),
+      unit: 'ms',
+      label: 'HRV',
+      status: hrvStatus,
+      statusMessage: hrvMsg,
+      icon: Icons.insights_rounded,
+      color: const Color(0xFFAB47BC), // purple
+      statusColor: _statusColor(hrvStatus),
+    ),
+    ParsedVitalSign(
+      type: VitalType.stress,
+      value: stress.toDouble(),
+      displayValue: '$stress',
+      unit: '%',
+      label: 'Stress Index',
+      status: stressStatus,
+      statusMessage: stressMsg,
+      icon: Icons.psychology_rounded,
+      color: const Color(0xFFFF7043), // orange-red
+      statusColor: _statusColor(stressStatus),
+    ),
+  ];
+}
+
+(VitalStatus, String) _classifyHrv(double hrv) {
+  if (hrv < 25) return (VitalStatus.critical, 'Very low (Highly stressed)');
+  if (hrv < 40) return (VitalStatus.warning, 'Slightly low');
+  return (VitalStatus.normal, 'Healthy range (Relaxed)');
+}
+
+(VitalStatus, String) _classifyStress(int stress) {
+  if (stress < 35) return (VitalStatus.normal, 'Relaxed');
+  if (stress < 60) return (VitalStatus.normal, 'Normal');
+  if (stress < 80) return (VitalStatus.warning, 'Elevated stress');
+  return (VitalStatus.critical, 'High stress');
+}
+
+ParsedVitalSign _parseSteps(CharacteristicValue cv) {
+  final bytes = cv.value;
+  int steps = 0;
+
+  if (bytes.length >= 4) {
+    steps = (bytes[0] & 0xFF) |
+        ((bytes[1] & 0xFF) << 8) |
+        ((bytes[2] & 0xFF) << 16) |
+        ((bytes[3] & 0xFF) << 24);
+  }
+
+  return ParsedVitalSign(
+    type: VitalType.steps,
+    value: steps.toDouble(),
+    displayValue: '$steps',
+    unit: 'steps',
+    label: 'Steps',
+    status: VitalStatus.normal,
+    statusMessage: 'Keep active!',
+    icon: Icons.directions_walk_rounded,
+    color: const Color(0xFFFFD54F), // yellow
+    statusColor: _statusColor(VitalStatus.normal),
+  );
+}
+
+ParsedVitalSign _parseSkinTemp(CharacteristicValue cv) {
+  final bytes = cv.value;
+  double temp = 0;
+
+  if (bytes.length >= 4) {
+    final raw = (bytes[0] & 0xFF) |
+        ((bytes[1] & 0xFF) << 8) |
+        ((bytes[2] & 0xFF) << 16) |
+        ((bytes[3] & 0xFF) << 24);
+    temp = raw / 100.0;
+  }
+
+  final (status, message) = _classifySkinTemp(temp);
+
+  return ParsedVitalSign(
+    type: VitalType.skinTemp,
+    value: temp,
+    displayValue: temp.toStringAsFixed(2),
+    unit: '°C',
+    label: 'Skin Temp',
+    status: status,
+    statusMessage: message,
+    icon: Icons.device_thermostat_rounded,
+    color: const Color(0xFF26A69A), // teal
+    statusColor: _statusColor(status),
+  );
+}
+
+(VitalStatus, String) _classifySkinTemp(double temp) {
+  if (temp < 30.5) return (VitalStatus.critical, 'Cold skin');
+  if (temp < 31.5) return (VitalStatus.warning, 'Cool skin');
+  if (temp <= 34.5) return (VitalStatus.normal, 'Normal skin temp');
+  if (temp <= 35.5) return (VitalStatus.warning, 'Warm skin');
+  return (VitalStatus.critical, 'Hot skin');
+}
+
+ParsedVitalSign _parseSpo2Plx(CharacteristicValue cv) {
+  final bytes = cv.value;
+  double spo2 = 0;
+
+  if (bytes.length >= 3) {
+    final rawSFloat = (bytes[1] & 0xFF) | ((bytes[2] & 0xFF) << 8);
+
+    // Decode IEEE 11073 16-bit SFLOAT
+    var mantissa = rawSFloat & 0x0FFF;
+    if ((mantissa & 0x0800) != 0) {
+      mantissa = mantissa - 4096;
+    }
+    var exponent = (rawSFloat >> 12) & 0x0F;
+    if (exponent >= 8) {
+      exponent = exponent - 16;
+    }
+
+    spo2 = (mantissa * math.pow(10, exponent)).toDouble();
+  }
+
+  final (status, message) = _classifySpO2(spo2);
+
+  return ParsedVitalSign(
+    type: VitalType.spo2, // maps to SpO2 type
+    value: spo2,
+    displayValue: spo2.toStringAsFixed(1),
+    unit: '%',
+    label: 'SpO₂ (PLX)',
+    status: status,
+    statusMessage: message,
+    icon: Icons.air_rounded,
+    color: const Color(0xFF29B6F6), // pulse ox blue
+    statusColor: _statusColor(status),
+  );
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 Color _statusColor(VitalStatus status) {
@@ -342,6 +512,54 @@ ParsedVitalSign getPlaceholderVital(VitalType type) {
         statusMessage: 'Waiting for data…',
         icon: Icons.battery_unknown_rounded,
         color: Color(0xFF66BB6A),
+        statusColor: Color(0xFF4CAF50),
+      ),
+    VitalType.hrv => const ParsedVitalSign(
+        type: VitalType.hrv,
+        value: 0,
+        displayValue: '--',
+        unit: 'ms',
+        label: 'HRV',
+        status: VitalStatus.normal,
+        statusMessage: 'Waiting for HRV…',
+        icon: Icons.insights_rounded,
+        color: Color(0xFFAB47BC),
+        statusColor: Color(0xFF4CAF50),
+      ),
+    VitalType.stress => const ParsedVitalSign(
+        type: VitalType.stress,
+        value: 0,
+        displayValue: '--',
+        unit: '%',
+        label: 'Stress Index',
+        status: VitalStatus.normal,
+        statusMessage: 'Waiting for stress…',
+        icon: Icons.psychology_rounded,
+        color: Color(0xFFFF7043),
+        statusColor: Color(0xFF4CAF50),
+      ),
+    VitalType.steps => const ParsedVitalSign(
+        type: VitalType.steps,
+        value: 0,
+        displayValue: '--',
+        unit: 'steps',
+        label: 'Steps',
+        status: VitalStatus.normal,
+        statusMessage: 'Waiting for steps…',
+        icon: Icons.directions_walk_rounded,
+        color: Color(0xFFFFD54F),
+        statusColor: Color(0xFF4CAF50),
+      ),
+    VitalType.skinTemp => const ParsedVitalSign(
+        type: VitalType.skinTemp,
+        value: 0,
+        displayValue: '--',
+        unit: '°C',
+        label: 'Skin Temp',
+        status: VitalStatus.normal,
+        statusMessage: 'Waiting for temp…',
+        icon: Icons.device_thermostat_rounded,
+        color: Color(0xFF26A69A),
         statusColor: Color(0xFF4CAF50),
       ),
     VitalType.unknown => const ParsedVitalSign(

@@ -93,19 +93,22 @@ class DeviceDetailBloc extends Bloc<DeviceDetailEvent, DeviceDetailState> {
   Timer? _reconnectTimer;
   Timer? _batteryPollTimer;
 
-  // ── SensioVital detection ──────────────────────────────────────────────────
-  /// Known device names that trigger auto-subscribe-all (dashboard mode).
-  static const _sensioNames = ['sensiovital', 'sensio vital', 'sensio_vital'];
+  static const _sensioNames = [
+    'sensiovital', 'sensio vital', 'sensio_vital',
+    'sensioring', 'sensio ring', 'sensio_ring'
+  ];
 
   bool _isSensioVital(String name, List<BleService> services) {
     final lower = name.toLowerCase().trim();
-    debugPrint('[DetailBloc] Checking if device "$name" is SensioVital. Services: ${services.map((s) => s.uuid).toList()}');
+    debugPrint('[DetailBloc] Checking if device "$name" is SensioVital/SensioRing. Services: ${services.map((s) => s.uuid).toList()}');
     if (_sensioNames.any((n) => lower.contains(n))) {
-      debugPrint('[DetailBloc] Detected SensioVital by name match');
+      debugPrint('[DetailBloc] Detected Sensio device by name match');
       return true;
     }
-    final hasVitalsSvc = services.any((s) => s.uuid.toLowerCase() == kSensioVitalsServiceUuid.toLowerCase());
-    debugPrint('[DetailBloc] Detected SensioVital by service UUID match: $hasVitalsSvc');
+    final hasVitalsSvc = services.any((s) =>
+        s.uuid.toLowerCase() == kSensioVitalsServiceUuid.toLowerCase() ||
+        s.uuid.toLowerCase() == kSensioRingServiceUuid.toLowerCase());
+    debugPrint('[DetailBloc] Detected Sensio device by service UUID match: $hasVitalsSvc');
     return hasVitalsSvc;
   }
 
