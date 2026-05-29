@@ -137,6 +137,28 @@ Our data-layer implementation ([ble_repository_impl.dart](file:///home/kaushik/D
 
 ---
 
+## 🚀 Additional Features & Experiments Explored
+
+1. **Connection History Persistence**:
+   - Saves previous device connections (`id`, `name`, and connection `timestamp`) locally using `shared_preferences`.
+   - Enables users to view, track, and instantly initiate connections to previously discovered/connected peripherals without waiting for a fresh scan broadcast.
+2. **Real-time Search & Signal Strength Filtering**:
+   - Integrates dynamic text-based search (name query matching) and RSSI signal-strength threshold slider filtering within the scanner BLoC.
+   - Optimizes usability in noise-heavy or high-density BLE environments by filtering out low-signal/unnamed background beacons.
+
+---
+
+## 🛠️ Improvements I Would Make with More Time
+
+1. **Proper Generic Multi-Device Connectivity**:
+   - Refactor the BLE layer and data parser to be fully generic instead of hardcoded to specific services.
+   - Allow simultaneous connection to multiple devices (e.g. smart rings, heart rate bands, and smart scales) at the same time.
+2. **Unified Vitals Dashboard**:
+   - Develop a centralized dashboard to track and display real-time telemetry from all connected devices simultaneously.
+   - Enable cross-device telemetry correlation (e.g. graphing heart rate from device A alongside SpO₂ from device B) on a single screen.
+
+---
+
 ## 📈 Scalability & Future Roadmap
 
 If deploying this application to a real-world production environment with hundreds of diverse medical/IoT devices, we would implement the following scaling strategies:
@@ -146,7 +168,6 @@ If deploying this application to a real-world production environment with hundre
        - Which services/characteristics to discover.
        - Byte-level parsing rules (offset, length, bit-masks, endianness, multipliers).
        - Custom UI styling mapping (colors, icons, names) for each sensor.
-2. **Multi-Device Concurrent Streaming**:
-   *   Expand the BLoC architecture to maintain a map of active `DeviceDetailBloc` instances or establish a global `ConnectionManager`. This would allow users to connect to multiple sensors (e.g. ECG chest strap + SpO₂ finger pulse + Smart scale) simultaneously, combining their telemetry streams into a single unified health timeline.
-3. **Background Syncing & Foreground Services**:
+
+2. **Background Syncing & Foreground Services**:
    *   Use Android Foreground Services (with notification) and iOS CoreBluetooth Background Mode to maintain GATT connection streams even when the app is minimized or the device is locked, pushing emergency alerts if vitals exceed critical thresholds.
